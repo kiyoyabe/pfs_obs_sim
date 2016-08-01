@@ -1,0 +1,3 @@
+[submodule "ets_fiber_assigner"]
+	path = ets_fiber_assigner
+	url = https://github.com/Subaru-PFS/ets_fiber_assigner.git
