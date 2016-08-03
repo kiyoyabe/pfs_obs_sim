@@ -6,6 +6,11 @@
 ## Description
 
 ## Requirements
+** PFS ETS package
+** PFS ETC package
+** Python modules:
+*** numpy/scipy
+*** matplotlib (optional)
 
 ## Install
 
@@ -15,4 +20,4 @@
 
 ## Author
 Kiyoto Yabe (Kavli IPMU)
-
+E-mail: kiyoto.yabe @ ipmu.jp
