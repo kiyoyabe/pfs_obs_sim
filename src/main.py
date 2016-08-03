@@ -2,6 +2,7 @@ import math,os,sys
 import scipy as sp
 import scipy.interpolate as it
 import subprocess
+import psycopg2
 
 home = '/work/PFS/pfs_obs_sim/'
 data_dir = home + 'data/'
@@ -26,36 +27,63 @@ class Pfi():
         self.pfi_y_rot = sp.sin(sp.pi/180.*self.pa) * self.pfi_x + sp.cos(sp.pi/180.*self.pa) * self.pfi_y + self.pc[1]
         return self.pfi_x_rot,self.pfi_y_rot
 
-class Targets():
-    def __init__(self,target_file):
-        dat = sp.genfromtxt(target_file,usecols=(2,3,4,17,7,11),dtype=[('id','i4'),('ra','f8'),('dec','f8'),('texp','f8'),('priority','f8'),('mag','f8')])
-        self.tgt_id, self.tgt_x, self.tgt_y, self.tgt_texp, self.tgt_prio, self.tgt_mag = dat['id'], dat['ra'], dat['dec'], dat['texp'], dat['priority'], dat['mag']
-        self.tgt_z = sp.random.uniform(0.5,2.5,len(self.tgt_id))
+class pfsDB():
+    def __init__(self):
         return None
-    def gen_list_for_ets(self,filename):
+    def connect(self,name,passwd):
+        self.name = name
+        self.passwd = passwd
+        self.conn = psycopg2.connect(
+        host = "192.168.156.76",
+        port = 5432,
+        database=self.name,
+        user="pfsdbadmin",
+        password=self.passwd)
+        print('connection to %s ... ok' % (self.name))
+        self.cur = self.conn.cursor()
+        return None
+
+    def getTargetList(self,filename):
+## load target data ##
+        print "loading target list ..."
+        self.cur.execute("SELECT \"targetId\",\"ra\",\"dec\",\"fiducialExptime\",\"priority\",\"fiberMag_g\",\"programId\" FROM \"Target\" WHERE (\"priority\" BETWEEN 1 AND 2) AND (\"fiberMag_g\" < 23.0);")
+        self.dat = sp.array(self.cur.fetchall(),dtype=[('targetId','i4'),('ra','f8'),('dec','f8'),('fiducialExptime','i4'),('priority','i4'),('fiberMag_g','f8'),('programId','i4')])
+        self.targetId = self.dat['targetId']
+        self.ra = self.dat['ra']
+        self.dec = self.dat['dec']
+        self.fiducialExptime = self.dat['fiducialExptime']
+        self.priority = self.dat['priority']
+        self.fiberMag_g = self.dat['fiberMag_g']
+        self.programId = self.dat['programId']
+        self.zph = sp.random.uniform(0.5,2.5,len(self.targetId))
+#        print self.targetId
+## save data ##
         file = open(filename,'w')
-        for i in range(len(self.tgt_id)):
-            file.write('%10s   %9.5f  %9.5f  %7.1f  %2d  %6.3f  N/A  N/A\n' % ('ID%d'%(self.tgt_id[i]),self.tgt_x[i],self.tgt_y[i],self.tgt_texp[i],self.tgt_prio[i],self.tgt_mag[i]))
+        for i in range(len(self.targetId)):
+            file.write('%10s   %9.5f  %9.5f  %7.1f  %2d  %6.3f  %3d  N/A\n' % ('ID%d'%(self.targetId[i]),self.ra[i],self.dec[i],self.fiducialExptime[i],self.priority[i],self.fiberMag_g[i],self.programId[i]))
         file.close()
-        return 0
-    def get_tgt_dict(self):
-        self.dict_tgt_x = {}
-        self.dict_tgt_y = {}
-        self.dict_tgt_mag = {}
-        self.dict_tgt_z = {}
-        for i in range(len(self.tgt_id)):
-            self.dict_tgt_x[self.tgt_id[i]] = self.tgt_x[i]
-            self.dict_tgt_y[self.tgt_id[i]] = self.tgt_y[i]
-            self.dict_tgt_mag[self.tgt_id[i]] = self.tgt_mag[i]
-            self.dict_tgt_z[self.tgt_id[i]] = self.tgt_z[i]
+#        self.targetId = dat[0]
+#        print self.targetId
         return 0
 
-    def get_tgt_id(self):
-        return self.tgt_id
-    def get_tgt_field_center(self):
-        return sp.median(self.tgt_x),sp.median(self.tgt_y)
-    def map_on_sky(self):
-        return self.tgt_x, self.tgt_y
+    def getTargetDic(self):
+        self.ra_dic = {}
+        self.dec_dic = {}
+        self.fiducialExptime_dic = {}
+        self.priority_dic = {}
+        self.fiberMag_g_dic = {}
+        self.programId_dic = {}
+        self.zph_dic = {}
+        for i in range(len(self.targetId)):
+            self.ra_dic[self.targetId[i]] = self.ra[i]
+            self.dec_dic[self.targetId[i]] = self.dec[i]
+            self.fiducialExptime_dic[self.targetId[i]] = self.fiducialExptime[i]
+            self.priority_dic[self.targetId[i]] = self.priority[i]
+            self.fiberMag_g_dic[self.targetId[i]] = self.fiberMag_g[i]
+            self.programId_dic[self.targetId[i]] = self.programId[i]
+            self.zph_dic[self.targetId[i]] = self.zph[i]
+#            return self.ra_dic,self.dec_dic,self.fiducialExptime_dic,self.priority_dic,self.fiberMag_g_dic,self.programId_dic
+        return 0
 
 class Template():
     def __init__(self,filename):
@@ -74,17 +102,19 @@ class Template():
         file.close()
         return 0
 
-class Ets():
+class pfsEts():
     def __init__(self):
         cmd = 'cd %s; make' % (ets_dir)
         subprocess.call(cmd, shell=True)
         return None
-    def run_assigner(self,assigner):
+    def run_assigner(self,assigner,pc,pa):
         self.assigner = assigner
+        self.pc = pc
+        self.pa = pa
         self.fraction = '0.50'
         self.objlist = '%s/ets.list' % (out_dir)
         self.output = '%s/ets.out' % (out_dir)
-        cmd = '%sets_demo assigner=%s input=%s fract=%s output=%s' % (ets_dir,self.assigner,self.objlist,self.fraction,self.output)
+        cmd = '%sets_demo assigner=%s input=%s fract=%s output=%s ra=%.5f dec=%.5f posang=%.1f' % (ets_dir,self.assigner,self.objlist,self.fraction,self.output,self.pc[0],self.pc[1],self.pa)
         proc = subprocess.call(cmd, shell=True)
         if proc == 0:
             print "Fiber Allocation Done!"
@@ -107,59 +137,64 @@ class Ets():
             print "Fiber Allocation Failed!"
         return 0
 
-class Etc():
+class pfsEtc():
     def __init__(self):
         cmd = 'cd %s; make' % (etc_dir)
         proc = subprocess.call(cmd, shell=True)
         return None
     def get_sn_table(self):
-        cmd = 'cd %s; python run_etc.py @run_etc.defaults --OUTFILE_NOISE=out/ref.noise.dat --OUTFILE_SNC=out/ref.snc.dat --OUTFILE_SNL=- --EXP_TIME=450 --EXP_NUM=2 --MAG_FILE=23.0 ' % (etc_dir)
+        cmd = 'cd %s; python run_etc.py @run_etc.defaults --OUTFILE_NOISE=out/ref.noise.dat --OUTFILE_SNC=out/ref.snc.dat --OUTFILE_SNL=- --EXP_TIME=450 --EXP_NUM=2 --MAG_FILE=23.0' % (etc_dir)
         proc = subprocess.call(cmd, shell=True)
         if proc == 0:
             print "SN table is created!"
         return 0
     def get_simulated_spectra(self,mag_file,objId):
-        cmd = 'cd %s; python gen_sim_spec.py @gen_sim_spec.defaults --EXP_NUM=2 --MAG_FILE=%s --etcFile=out/ref.snc.dat --nrealize=1 --outDir=%s --asciiTable=None --writeFits=True --objId=%d' % (etc_dir,mag_file,out_dir,objId)
+        cmd = 'cd %s; python gen_sim_spec.py @gen_sim_spec.defaults --EXP_NUM=2 --MAG_FILE=%s --etcFile=out/ref.snc.dat --nrealize=1 --outDir=%s/fits/ --asciiTable=None --writeFits=True --objId=%d' % (etc_dir,mag_file,out_dir,objId)
         proc = subprocess.call(cmd, shell=True)
         return proc
 
 def main():
     if os.path.exists(out_dir)==False:
         os.mkdir(out_dir)
-#    pfi.map_on_sky(pc=(0.0,0.0),pa=30.0)
-#    tgt.map_on_sky()
-## taget list ##
-    print "loading target list ..."
-    tgt = Targets('%s/catalogue/dbsim_test_cosmology.dat' % (data_dir))
-    tgt.gen_list_for_ets('%s/ets.list' % (out_dir))
-    tgt.get_tgt_dict()
+######################
+## connect to pfsDB ##
+######################
+    print "Enter DB password:"
+    dbpasswd = raw_input()
+    db = pfsDB()
+    db.connect(name='pfsdbsim',passwd=dbpasswd)
+    db.getTargetList(filename='%s/ets.list' % (out_dir))
+    db.getTargetDic()
+#################
 ## ETS package ##
+#################
+    tile = 11
+    pc = (33.84251,-4.58684)
+    pa = 146.9
     print "initializing ETS package ..."
-    ets = Ets()
-    ets.run_assigner(assigner='naive')
+    ets = pfsEts()
+    ets.run_assigner(assigner='naive',pc=pc,pa=pa)
     print "%d objects are assigned!" % (len(ets.assigned_tgt))
-    file = open('test.dat','w')
-    for i in range(len(ets.assigned_tgt)):
-        file.write('%d %.5f %.5f %.5f %.5f\n' % (ets.assigned_tgt[i],ets.assigned_tgt_ra[i],ets.assigned_tgt_dec[i],tgt.dict_tgt_x[ets.assigned_tgt[i]],tgt.dict_tgt_y[ets.assigned_tgt[i]]))
-    file.close()
+#    file = open('test.dat','w')
+#    for i in range(len(ets.assigned_tgt)):
+#        file.write('%d %.5f %.5f %.5f %.5f\n' % (ets.assigned_tgt[i],ets.assigned_tgt_ra[i],ets.assigned_tgt_dec[i],tgt.dict_tgt_x[ets.assigned_tgt[i]],tgt.dict_tgt_y[ets.assigned_tgt[i]]))
+#    file.close()
+#######################
 ## spectral template ##
+#######################
     stmp = Template(data_dir+'/spec_template/ex_gal_sf.dat')
+#################
 ## ETC package ##
+#################
     print "initializing ETC package ..."
-    etc = Etc()
+    etc = pfsEtc()
 #    etc.get_sn_table()
 ## Simulated spectra ##
     print "generating simulated spectra ..."
     for i in range(len(ets.assigned_tgt)):
-        print "ObjId: %d" % (ets.assigned_tgt[i])
-        stmp.get_norm_template(tgt.dict_tgt_z[ets.assigned_tgt[i]],tgt.dict_tgt_mag[ets.assigned_tgt[i]],out_dir+'mag.dat')
-        etc.get_simulated_spectra(mag_file=out_dir+'mag.dat',objId=ets.assigned_tgt[i])
-
-#    print pfi.get_num_cobra()
-#    for i in range(pfi.get_num_cobra()):
-#        print pfi.pfi_x[i],pfi.pfi_y[i],pfi.pfi_x_rot[i],pfi.pfi_y_rot[i]
-#    for i in range(len(tgt.tgt_id)):
-#        print tgt.tgt_id[i],tgt.tgt_x[i],tgt.tgt_y[i]
+#        print "ObjId: %d" % (ets.assigned_tgt[i])
+        stmp.get_norm_template(db.zph_dic[ets.assigned_tgt[i]],db.fiberMag_g_dic[ets.assigned_tgt[i]],out_dir+'mag.dat')
+#        etc.get_simulated_spectra(mag_file=out_dir+'mag.dat',objId=ets.assigned_tgt[i])
 
 if __name__ == '__main__':
     main()
